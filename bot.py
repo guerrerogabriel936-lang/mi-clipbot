@@ -3,7 +3,6 @@ import re
 import asyncio
 import threading
 import subprocess
-from pathlib import Path
 
 from flask import Flask
 from telegram import Update
@@ -37,7 +36,7 @@ os.makedirs(CLIPS_DIR, exist_ok=True)
 
 
 # =========================================================
-# SERVIDOR WEB PARA RENDER
+# SERVIDOR WEB
 # =========================================================
 
 web = Flask(__name__)
@@ -65,15 +64,17 @@ def iniciar_web():
 
 
 # =========================================================
-# START
+# COMANDO START
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     await update.message.reply_text(
         "🤖 ¡Hola! Soy MI CLIPBOT.\n\n"
-        "🎬 Envíame un video y crearé 2 clips.\n"
-        "📝 Prepararemos subtítulos en español."
+        "🎬 Envíame un video y crearé 2 clips."
     )
 
 
@@ -118,46 +119,7 @@ def obtener_duracion(video):
 
 
 # =========================================================
-# CREAR UN CLIP
-# =========================================================
-
-def crear_clip(video, inicio, duracion, salida):
-
-    resultado = subprocess.run(
-        [
-            FFMPEG,
-            "-y",
-            "-ss",
-            str(inicio),
-            "-i",
-            video,
-            "-t",
-            str(duracion),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            salida,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    if resultado.returncode != 0:
-        raise Exception(
-            "FFmpeg no pudo crear el clip."
-        )
-
-
-# =========================================================
-# CREAR LOS 2 CLIPS
+# CREAR CLIPS
 # =========================================================
 
 def crear_clips(video):
@@ -173,67 +135,79 @@ def crear_clips(video):
 
     clip1 = os.path.join(
         CLIPS_DIR,
-        "MI_CLIP_1.mp4",
+        "MI_CLIP_1.mp4"
     )
 
     clip2 = os.path.join(
         CLIPS_DIR,
-        "MI_CLIP_2.mp4",
+        "MI_CLIP_2.mp4"
     )
 
-    crear_clip(
-        video,
-        0,
-        mitad,
-        clip1,
-    )
-
-    crear_clip(
-        video,
-        mitad,
-        mitad,
-        clip2,
-    )
-
-    return clip1, clip2
-
-
-# =========================================================
-# SUBTÍTULOS
-# =========================================================
-#
-# Esta función deja preparada la estructura.
-# La transcripción automática con Whisper se activará
-# después de instalar/configurar Whisper en Render.
-#
-
-def agregar_subtitulos(clip, salida):
-
-    # Por ahora copiamos el clip.
-    # En el siguiente paso añadiremos Whisper + SRT
-    # y los subtítulos españoles abajo del video.
-
-    resultado = subprocess.run(
+    resultado1 = subprocess.run(
         [
             FFMPEG,
             "-y",
             "-i",
-            clip,
-            "-c",
-            "copy",
-            salida,
+            video,
+            "-ss",
+            "0",
+            "-t",
+            str(mitad),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            clip1,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
 
-    if resultado.returncode != 0:
+    if resultado1.returncode != 0:
         raise Exception(
-            "No pude preparar el video."
+            "No pude crear el clip 1."
         )
 
-    return salida
+    resultado2 = subprocess.run(
+        [
+            FFMPEG,
+            "-y",
+            "-i",
+            video,
+            "-ss",
+            str(mitad),
+            "-t",
+            str(mitad),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            clip2,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if resultado2.returncode != 0:
+        raise Exception(
+            "No pude crear el clip 2."
+        )
+
+    return clip1, clip2
 
 
 # =========================================================
@@ -250,27 +224,17 @@ async def procesar_video(
 
     video_entrada = os.path.join(
         VIDEOS_DIR,
-        nombre + ".mp4",
+        nombre + ".mp4"
     )
 
     clip1 = os.path.join(
         CLIPS_DIR,
-        "MI_CLIP_1.mp4",
+        "MI_CLIP_1.mp4"
     )
 
     clip2 = os.path.join(
         CLIPS_DIR,
-        "MI_CLIP_2.mp4",
-    )
-
-    clip1_final = os.path.join(
-        CLIPS_DIR,
-        "MI_CLIP_1_FINAL.mp4",
-    )
-
-    clip2_final = os.path.join(
-        CLIPS_DIR,
-        "MI_CLIP_2_FINAL.mp4",
+        "MI_CLIP_2.mp4"
     )
 
     try:
@@ -293,36 +257,17 @@ async def procesar_video(
         await loop.run_in_executor(
             None,
             crear_clips,
-            video_entrada,
+            video_entrada
         )
 
         await mensaje.reply_text(
-            "📝 Preparando los clips para "
-            "los subtítulos en español..."
-        )
-
-        await loop.run_in_executor(
-            None,
-            agregar_subtitulos,
-            clip1,
-            clip1_final,
-        )
-
-        await loop.run_in_executor(
-            None,
-            agregar_subtitulos,
-            clip2,
-            clip2_final,
-        )
-
-        await mensaje.reply_text(
-            "✅ ¡Los 2 clips están listos!\n\n"
-            "📤 Enviándotelos..."
+            "✅ ¡Los clips están listos!\n\n"
+            "📤 Te los estoy enviando..."
         )
 
         with open(
-            clip1_final,
-            "rb",
+            clip1,
+            "rb"
         ) as archivo1:
 
             await mensaje.reply_video(
@@ -335,8 +280,8 @@ async def procesar_video(
             )
 
         with open(
-            clip2_final,
-            "rb",
+            clip2,
+            "rb"
         ) as archivo2:
 
             await mensaje.reply_video(
@@ -349,16 +294,14 @@ async def procesar_video(
             )
 
         await mensaje.reply_text(
-            "🚀 ¡Proceso terminado!\n\n"
-            "▶️ La conexión con YouTube "
-            "la configuraremos después."
+            "🚀 ¡Proceso terminado!"
         )
 
     except Exception as error:
 
         print(
             "ERROR:",
-            repr(error),
+            repr(error)
         )
 
         await mensaje.reply_text(
@@ -368,15 +311,11 @@ async def procesar_video(
 
     finally:
 
-        archivos = [
+        for archivo in [
             video_entrada,
             clip1,
             clip2,
-            clip1_final,
-            clip2_final,
-        ]
-
-        for archivo in archivos:
+        ]:
 
             try:
 
@@ -393,7 +332,7 @@ async def procesar_video(
 
 async def recibir_video(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     if not update.message:
@@ -413,17 +352,17 @@ async def recibir_video(
     await procesar_video(
         update,
         archivo,
-        nombre,
+        nombre
     )
 
 
 # =========================================================
-# RECIBIR VIDEO COMO DOCUMENTO
+# RECIBIR VIDEO COMO ARCHIVO
 # =========================================================
 
 async def recibir_documento(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     if not update.message:
@@ -465,7 +404,7 @@ async def recibir_documento(
     await procesar_video(
         update,
         archivo,
-        nombre,
+        nombre
     )
 
 
@@ -493,21 +432,21 @@ def iniciar_bot():
     app.add_handler(
         CommandHandler(
             "start",
-            start,
+            start
         )
     )
 
     app.add_handler(
         MessageHandler(
             filters.VIDEO,
-            recibir_video,
+            recibir_video
         )
     )
 
     app.add_handler(
         MessageHandler(
             filters.Document.VIDEO,
-            recibir_documento,
+            recibir_documento
         )
     )
 
@@ -528,7 +467,9 @@ if __name__ == "__main__":
 
     hilo = threading.Thread(
         target=iniciar_web,
-        daemon=True,
+        daemon=True
     )
 
     hilo.start()
+
+    iniciar_bot()
