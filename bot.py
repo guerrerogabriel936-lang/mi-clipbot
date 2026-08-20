@@ -1,15 +1,16 @@
 import os
-import re
 import asyncio
 import threading
 import subprocess
+import uuid
 
 from flask import Flask
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -24,27 +25,28 @@ import imageio_ffmpeg
 TOKEN = os.getenv("BOT_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("Falta BOT_TOKEN en Render")
+    raise RuntimeError("BOT_TOKEN no está configurado en Render")
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
-VIDEOS_DIR = "videos"
-CLIPS_DIR = "clips"
+BASE_DIR = os.getcwd()
+VIDEOS_DIR = os.path.join(BASE_DIR, "videos")
+CLIPS_DIR = os.path.join(BASE_DIR, "clips")
 
 os.makedirs(VIDEOS_DIR, exist_ok=True)
 os.makedirs(CLIPS_DIR, exist_ok=True)
 
 
 # =========================================================
-# SERVIDOR WEB
+# SERVIDOR WEB PARA RENDER
 # =========================================================
 
 web = Flask(__name__)
 
 
 @web.route("/")
-def inicio():
-    return "MI CLIPBOT funcionando correctamente."
+def home():
+    return "🤖 MI CLIPBOT está funcionando correctamente."
 
 
 @web.route("/health")
@@ -64,19 +66,112 @@ def iniciar_web():
 
 
 # =========================================================
-# TELEGRAM
+# MENÚ PRINCIPAL
+# =========================================================
+
+def menu_principal():
+
+    botones = [
+        [
+            InlineKeyboardButton(
+                "🎬 Crear 2 clips",
+                callback_data="clips"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📱 Clips verticales 9:16",
+                callback_data="vertical"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🎥 Clips normales 16:9",
+                callback_data="horizontal"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "ℹ️ Cómo funciona",
+                callback_data="info"
+            )
+        ]
+    ]
+
+    return InlineKeyboardMarkup(botones)
+
+
+# =========================================================
+# START
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    context.user_data["formato"] = "vertical"
+
     await update.message.reply_text(
-        "🤖 Hola, soy MI CLIPBOT.\n\n"
-        "🎬 Envíame un video y crearé 2 clips."
+        "🤖 *MI-CLIPBOT*\n\n"
+        "🎬 Una versión gratuita tipo editor de clips.\n\n"
+        "Envíame un video y puedo convertirlo "
+        "en 2 clips.\n\n"
+        "📱 Recomendado: formato vertical 9:16\n"
+        "🎥 También puedo conservar 16:9.",
+        reply_markup=menu_principal(),
+        parse_mode="Markdown"
     )
 
 
 # =========================================================
-# DURACIÓN
+# BOTONES
+# =========================================================
+
+async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    if query.data == "clips":
+
+        await query.message.reply_text(
+            "🎬 Perfecto.\n\n"
+            "Envíame el video y crearé 2 clips."
+        )
+
+    elif query.data == "vertical":
+
+        context.user_data["formato"] = "vertical"
+
+        await query.message.reply_text(
+            "📱 Formato vertical seleccionado.\n\n"
+            "Los clips serán preparados para "
+            "Shorts, Reels y TikTok."
+        )
+
+    elif query.data == "horizontal":
+
+        context.user_data["formato"] = "horizontal"
+
+        await query.message.reply_text(
+            "🎥 Formato horizontal seleccionado."
+        )
+
+    elif query.data == "info":
+
+        await query.message.reply_text(
+            "ℹ️ MI-CLIPBOT\n\n"
+            "1️⃣ Envías un video.\n"
+            "2️⃣ Lo proceso.\n"
+            "3️⃣ Creo 2 clips.\n"
+            "4️⃣ Los convierto al formato elegido.\n"
+            "5️⃣ Te devuelvo los clips.\n\n"
+            "🚀 Más adelante añadiremos publicación "
+            "directa en YouTube."
+        )
+
+
+# =========================================================
+# OBTENER DURACIÓN
 # =========================================================
 
 def obtener_duracion(video):
@@ -93,6 +188,8 @@ def obtener_duracion(video):
     )
 
     texto = resultado.stderr
+
+    import re
 
     encontrado = re.search(
         r"Duration:\s*(\d+):(\d+):([\d.]+)",
@@ -116,15 +213,20 @@ def obtener_duracion(video):
 
 
 # =========================================================
-# CREAR UN CLIP
+# CREAR CLIP VERTICAL
 # =========================================================
 
-def crear_clip(
-    video,
+def crear_vertical(
+    entrada,
+    salida,
     inicio,
-    duracion,
-    salida
+    duracion
 ):
+
+    filtro = (
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920"
+    )
 
     resultado = subprocess.run(
         [
@@ -133,19 +235,28 @@ def crear_clip(
             "-ss",
             str(inicio),
             "-i",
-            video,
+            entrada,
             "-t",
             str(duracion),
+
+            "-vf",
+            filtro,
+
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
             "-crf",
-            "23",
+            "27",
+
             "-c:a",
             "aac",
+            "-b:a",
+            "128k",
+
             "-movflags",
             "+faststart",
+
             salida
         ],
         stdout=subprocess.PIPE,
@@ -155,27 +266,84 @@ def crear_clip(
 
     if resultado.returncode != 0:
 
-        print(resultado.stderr)
-
         raise Exception(
-            "Error creando el clip."
+            "Error creando video vertical:\n"
+            + resultado.stderr[-1500:]
         )
 
 
 # =========================================================
-# CREAR LOS 2 CLIPS
+# CREAR CLIP HORIZONTAL
 # =========================================================
 
-def crear_clips(video):
+def crear_horizontal(
+    entrada,
+    salida,
+    inicio,
+    duracion
+):
 
-    duracion = obtener_duracion(video)
+    resultado = subprocess.run(
+        [
+            FFMPEG,
+            "-y",
+            "-ss",
+            str(inicio),
+            "-i",
+            entrada,
+            "-t",
+            str(duracion),
 
-    if duracion < 4:
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "27",
+
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+
+            "-movflags",
+            "+faststart",
+
+            salida
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if resultado.returncode != 0:
+
         raise Exception(
-            "El video es demasiado corto."
+            "Error creando video:\n"
+            + resultado.stderr[-1500:]
         )
 
-    mitad = duracion / 2
+
+# =========================================================
+# CREAR 2 CLIPS
+# =========================================================
+
+def crear_clips(video, formato):
+
+    duracion_total = obtener_duracion(video)
+
+    if duracion_total < 8:
+
+        raise Exception(
+            "El video debe durar al menos 8 segundos."
+        )
+
+    # Dejamos unos segundos de margen
+    duracion_util = duracion_total
+
+    mitad = duracion_util / 2
+
+    duracion_clip = mitad
 
     clip1 = os.path.join(
         CLIPS_DIR,
@@ -187,51 +355,65 @@ def crear_clips(video):
         "MI_CLIP_2.mp4"
     )
 
-    crear_clip(
-        video,
-        0,
-        mitad,
-        clip1
-    )
+    # Borrar archivos anteriores
+    for archivo in [clip1, clip2]:
 
-    crear_clip(
-        video,
-        mitad,
-        mitad,
-        clip2
-    )
+        if os.path.exists(archivo):
+
+            try:
+                os.remove(archivo)
+            except Exception:
+                pass
+
+    if formato == "vertical":
+
+        crear_vertical(
+            video,
+            clip1,
+            0,
+            duracion_clip
+        )
+
+        crear_vertical(
+            video,
+            clip2,
+            mitad,
+            duracion_clip
+        )
+
+    else:
+
+        crear_horizontal(
+            video,
+            clip1,
+            0,
+            duracion_clip
+        )
+
+        crear_horizontal(
+            video,
+            clip2,
+            mitad,
+            duracion_clip
+        )
 
     return clip1, clip2
 
 
 # =========================================================
-# RECIBIR VIDEO
+# PROCESAR VIDEO
 # =========================================================
 
-async def recibir_video(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+async def procesar_video(
+    update,
+    archivo_telegram,
+    nombre,
+    formato
 ):
-
-    if not update.message:
-        return
-
-    if not update.message.video:
-        return
 
     mensaje = update.message
 
-    await mensaje.reply_text(
-        "⏳ Recibí tu video. Preparando los clips..."
-    )
-
-    video = mensaje.video
-
-    archivo = await video.get_file()
-
-    nombre = str(video.file_unique_id)
-
-    ruta = os.path.join(
+    video_entrada = os.path.join(
         VIDEOS_DIR,
         nombre + ".mp4"
     )
@@ -248,10 +430,20 @@ async def recibir_video(
 
     try:
 
-        await archivo.download_to_drive(ruta)
+        await mensaje.reply_text(
+            "⏳ 1/4 — Descargando tu video..."
+        )
+
+        await archivo_telegram.download_to_drive(
+            video_entrada
+        )
 
         await mensaje.reply_text(
-            "✂️ Creando los 2 clips..."
+            "🧠 2/4 — Preparando el video..."
+        )
+
+        await mensaje.reply_text(
+            "✂️ 3/4 — Creando tus 2 clips..."
         )
 
         loop = asyncio.get_running_loop()
@@ -259,29 +451,50 @@ async def recibir_video(
         await loop.run_in_executor(
             None,
             crear_clips,
-            ruta
+            video_entrada,
+            formato
         )
 
         await mensaje.reply_text(
-            "✅ Clips creados. Enviándotelos..."
+            "📤 4/4 — Enviando los clips..."
         )
 
-        with open(clip1, "rb") as video1:
+        # =================================================
+        # CLIP 1
+        # =================================================
+
+        with open(
+            clip1,
+            "rb"
+        ) as archivo1:
 
             await mensaje.reply_video(
-                video=video1,
-                caption="🎬 MI CLIP 1",
+                video=archivo1,
+                caption=(
+                    "🔥 MI CLIP 1\n\n"
+                    "🎬 Creado con MI-CLIPBOT"
+                ),
                 read_timeout=600,
                 write_timeout=600,
                 connect_timeout=60,
                 pool_timeout=60
             )
 
-        with open(clip2, "rb") as video2:
+        # =================================================
+        # CLIP 2
+        # =================================================
+
+        with open(
+            clip2,
+            "rb"
+        ) as archivo2:
 
             await mensaje.reply_video(
-                video=video2,
-                caption="🎬 MI CLIP 2",
+                video=archivo2,
+                caption=(
+                    "🔥 MI CLIP 2\n\n"
+                    "🎬 Creado con MI-CLIPBOT"
+                ),
                 read_timeout=600,
                 write_timeout=600,
                 connect_timeout=60,
@@ -289,7 +502,9 @@ async def recibir_video(
             )
 
         await mensaje.reply_text(
-            "🚀 ¡Listo! Ya tienes tus 2 clips."
+            "✅ ¡Listo!\n\n"
+            "Tus 2 clips fueron creados correctamente.",
+            reply_markup=menu_principal()
         )
 
     except Exception as error:
@@ -306,23 +521,63 @@ async def recibir_video(
 
     finally:
 
-        for archivo_temp in [
-            ruta,
+        for archivo in [
+            video_entrada,
             clip1,
             clip2
         ]:
 
             try:
 
-                if os.path.exists(archivo_temp):
-                    os.remove(archivo_temp)
+                if os.path.exists(archivo):
+
+                    os.remove(archivo)
 
             except Exception:
+
                 pass
 
 
 # =========================================================
-# RECIBIR VIDEO COMO ARCHIVO
+# RECIBIR VIDEO NORMAL
+# =========================================================
+
+async def recibir_video(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.message:
+        return
+
+    if not update.message.video:
+        return
+
+    video = update.message.video
+
+    archivo = await video.get_file()
+
+    nombre = (
+        str(video.file_unique_id)
+        + "_"
+        + str(uuid.uuid4())[:8]
+    )
+
+    formato = context.user_data.get(
+        "formato",
+        "vertical"
+    )
+
+    await procesar_video(
+        update,
+        archivo,
+        nombre,
+        formato
+    )
+
+
+# =========================================================
+# RECIBIR VIDEO COMO DOCUMENTO
 # =========================================================
 
 async def recibir_documento(
@@ -338,7 +593,9 @@ async def recibir_documento(
     if not documento:
         return
 
-    nombre = documento.file_name or ""
+    nombre_archivo = (
+        documento.file_name or ""
+    )
 
     extensiones = (
         ".mp4",
@@ -348,114 +605,35 @@ async def recibir_documento(
         ".webm"
     )
 
-    if not nombre.lower().endswith(extensiones):
+    if not nombre_archivo.lower().endswith(
+        extensiones
+    ):
 
         await update.message.reply_text(
-            "⚠️ Ese archivo no parece ser un video."
+            "⚠️ Envíame un archivo de video."
         )
 
         return
 
     archivo = await documento.get_file()
 
-    video_nombre = str(
-        documento.file_unique_id
+    nombre = (
+        str(documento.file_unique_id)
+        + "_"
+        + str(uuid.uuid4())[:8]
     )
 
-    ruta = os.path.join(
-        VIDEOS_DIR,
-        video_nombre + ".mp4"
+    formato = context.user_data.get(
+        "formato",
+        "vertical"
     )
 
-    await update.message.reply_text(
-        "⏳ Recibí tu archivo de video..."
+    await procesar_video(
+        update,
+        archivo,
+        nombre,
+        formato
     )
-
-    try:
-
-        await archivo.download_to_drive(ruta)
-
-        loop = asyncio.get_running_loop()
-
-        await update.message.reply_text(
-            "✂️ Creando los 2 clips..."
-        )
-
-        await loop.run_in_executor(
-            None,
-            crear_clips,
-            ruta
-        )
-
-        clip1 = os.path.join(
-            CLIPS_DIR,
-            "MI_CLIP_1.mp4"
-        )
-
-        clip2 = os.path.join(
-            CLIPS_DIR,
-            "MI_CLIP_2.mp4"
-        )
-
-        with open(clip1, "rb") as video1:
-
-            await update.message.reply_video(
-                video=video1,
-                caption="🎬 MI CLIP 1",
-                read_timeout=600,
-                write_timeout=600,
-                connect_timeout=60,
-                pool_timeout=60
-            )
-
-        with open(clip2, "rb") as video2:
-
-            await update.message.reply_video(
-                video=video2,
-                caption="🎬 MI CLIP 2",
-                read_timeout=600,
-                write_timeout=600,
-                connect_timeout=60,
-                pool_timeout=60
-            )
-
-        await update.message.reply_text(
-            "🚀 ¡Proceso terminado!"
-        )
-
-    except Exception as error:
-
-        print(
-            "ERROR:",
-            repr(error)
-        )
-
-        await update.message.reply_text(
-            "❌ Error:\n\n"
-            + str(error)
-        )
-
-    finally:
-
-        for archivo_temp in [
-            ruta,
-            os.path.join(
-                CLIPS_DIR,
-                "MI_CLIP_1.mp4"
-            ),
-            os.path.join(
-                CLIPS_DIR,
-                "MI_CLIP_2.mp4"
-            )
-        ]:
-
-            try:
-
-                if os.path.exists(archivo_temp):
-                    os.remove(archivo_temp)
-
-            except Exception:
-                pass
 
 
 # =========================================================
@@ -465,9 +643,13 @@ async def recibir_documento(
 def iniciar_bot():
 
     request = HTTPXRequest(
+
         connect_timeout=60,
+
         read_timeout=600,
+
         write_timeout=600,
+
         pool_timeout=60
     )
 
@@ -483,6 +665,12 @@ def iniciar_bot():
         CommandHandler(
             "start",
             start
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            botones
         )
     )
 
@@ -515,11 +703,11 @@ def iniciar_bot():
 
 if __name__ == "__main__":
 
-    hilo = threading.Thread(
+    hilo_web = threading.Thread(
         target=iniciar_web,
         daemon=True
     )
 
-    hilo.start()
+    hilo_web.start()
 
     iniciar_bot()
