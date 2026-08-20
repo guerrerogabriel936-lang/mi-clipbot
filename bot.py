@@ -240,7 +240,8 @@ def crear_vertical(
             str(duracion),
 
             "-vf",
-            filtro,
+"scale=720:1280:force_original_aspect_ratio=decrease,"
+"pad=720:1280:(ow-iw)/2:(oh-ih)/2",
 
             "-c:v",
             "libx264",
