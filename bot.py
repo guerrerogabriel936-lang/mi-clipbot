@@ -3,7 +3,6 @@ import re
 import asyncio
 import threading
 import subprocess
-import whisper
 
 from flask import Flask
 from telegram import Update
