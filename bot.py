@@ -1176,7 +1176,7 @@ async def procesar_video(
         # Guardamos los clips para poder
         # publicarlos después en YouTube.
 
-        context = update._context
+        
 
         context.user_data[
             "clips"
@@ -1301,7 +1301,7 @@ async def recibir_video(
     await procesar_video(
 
         update,
-
+context,
         archivo,
 
         nombre,
@@ -1371,7 +1371,7 @@ async def recibir_documento(
     await procesar_video(
 
         update,
-
+context,
         archivo,
 
         nombre,
