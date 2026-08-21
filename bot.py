@@ -1122,8 +1122,8 @@ def crear_clips(
 # =========================================================
 
 async def procesar_video(
-    update,
-    archivo_telegram,
+ update,
+   context, archivo_telegram,
     nombre,
     formato
 ):
@@ -1301,7 +1301,7 @@ async def recibir_video(
     await procesar_video(
 
         update,
-
+context,
         archivo,
 
         nombre,
