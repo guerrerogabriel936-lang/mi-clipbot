@@ -1,20 +1,15 @@
-
 import os
 import asyncio
 import threading
 import subprocess
 import uuid
-import json
 import secrets
+import re
 
 from flask import Flask, redirect, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -23,12 +18,10 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
 from telegram.request import HTTPXRequest
 
 import imageio_ffmpeg
 
-# YouTube / Google
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -73,15 +66,25 @@ YOUTUBE_SCOPE = [
     "https://www.googleapis.com/auth/youtube.upload"
 ]
 
-# Estados OAuth temporales
 oauth_states = {}
 
 
 # =========================================================
-# SERVIDOR WEB PARA RENDER
+# SERVIDOR WEB
 # =========================================================
 
 web = Flask(__name__)
+
+# IMPORTANTE:
+# Render funciona detrás de un proxy HTTPS.
+# Esto hace que Flask reconozca correctamente HTTPS.
+web.wsgi_app = ProxyFix(
+    web.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+    x_port=1,
+)
 
 
 @web.route("/")
@@ -108,8 +111,8 @@ def connect_youtube():
 
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return (
-            "Faltan GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET "
-            "en las variables de Render.",
+            "Faltan GOOGLE_CLIENT_ID o "
+            "GOOGLE_CLIENT_SECRET en Render.",
             500
         )
 
@@ -184,11 +187,14 @@ def oauth2callback():
 
     try:
 
+        # Gracias a ProxyFix, request.url será HTTPS
         flow.fetch_token(
             authorization_response=request.url
         )
 
     except Exception as error:
+
+        print("ERROR OAUTH:", repr(error))
 
         return (
             "❌ Error conectando YouTube:<br><br>"
@@ -203,7 +209,11 @@ def oauth2callback():
         f"{user_id}.json"
     )
 
-    with open(token_file, "w", encoding="utf-8") as archivo:
+    with open(
+        token_file,
+        "w",
+        encoding="utf-8"
+    ) as archivo:
 
         archivo.write(
             credentials.to_json()
@@ -231,7 +241,7 @@ def oauth2callback():
         </p>
 
         <p>
-        Puedes volver a Telegram.
+        Ya puedes volver a Telegram.
         </p>
 
     </body>
@@ -270,9 +280,9 @@ def token_path(user_id):
 
 def youtube_conectado(user_id):
 
-    archivo = token_path(user_id)
-
-    return os.path.exists(archivo)
+    return os.path.exists(
+        token_path(user_id)
+    )
 
 
 def obtener_youtube(user_id):
@@ -280,6 +290,7 @@ def obtener_youtube(user_id):
     archivo = token_path(user_id)
 
     if not os.path.exists(archivo):
+
         raise Exception(
             "Tu cuenta de YouTube no está conectada."
         )
@@ -289,7 +300,10 @@ def obtener_youtube(user_id):
         YOUTUBE_SCOPE
     )
 
-    if credentials.expired and credentials.refresh_token:
+    if (
+        credentials.expired
+        and credentials.refresh_token
+    ):
 
         from google.auth.transport.requests import Request
 
@@ -353,6 +367,7 @@ def subir_youtube(
         estado, respuesta = solicitud.next_chunk()
 
         if estado:
+
             print(
                 "Subiendo:",
                 int(estado.progress() * 100),
@@ -408,14 +423,11 @@ def menu_principal():
                 callback_data="info"
             )
         ]
+
     ]
 
     return InlineKeyboardMarkup(botones)
 
-
-# =========================================================
-# MENÚ PUBLICACIÓN
-# =========================================================
 
 def menu_privacidad():
 
@@ -467,10 +479,6 @@ async def start(
         "📹 Envíame un video largo y crearé "
         "*5 clips de 30 segundos*.\n\n"
 
-        "Ejemplo:\n"
-        "🎥 Video de 9 minutos\n"
-        "✂️ 5 clips × 30 segundos\n\n"
-
         "📱 Vertical para Shorts/Reels/TikTok\n"
         "🎥 Horizontal para YouTube\n\n"
 
@@ -478,6 +486,7 @@ async def start(
         "y publicar tus clips.",
 
         reply_markup=menu_principal(),
+
         parse_mode="Markdown"
     )
 
@@ -495,28 +504,20 @@ async def botones(
 
     await query.answer()
 
-    user_id = str(query.from_user.id)
-
-    # ---------------------------------------------
-    # CREAR CLIPS
-    # ---------------------------------------------
+    user_id = str(
+        query.from_user.id
+    )
 
     if query.data == "clips":
 
         await query.message.reply_text(
 
             "🎬 Perfecto.\n\n"
-
             "Envíame tu video.\n\n"
-
             "Crearé automáticamente "
             "5 clips de aproximadamente "
-            "30 segundos cada uno."
+            "30 segundos."
         )
-
-    # ---------------------------------------------
-    # VERTICAL
-    # ---------------------------------------------
 
     elif query.data == "vertical":
 
@@ -525,18 +526,11 @@ async def botones(
         await query.message.reply_text(
 
             "📱 *Vertical 9:16 seleccionado.*\n\n"
-
-            "Ideal para:\n"
-            "• YouTube Shorts\n"
-            "• TikTok\n"
-            "• Instagram Reels",
+            "Ideal para YouTube Shorts, "
+            "TikTok e Instagram Reels.",
 
             parse_mode="Markdown"
         )
-
-    # ---------------------------------------------
-    # HORIZONTAL
-    # ---------------------------------------------
 
     elif query.data == "horizontal":
 
@@ -550,10 +544,6 @@ async def botones(
             parse_mode="Markdown"
         )
 
-    # ---------------------------------------------
-    # CONECTAR YOUTUBE
-    # ---------------------------------------------
-
     elif query.data == "youtube":
 
         if youtube_conectado(user_id):
@@ -565,12 +555,9 @@ async def botones(
             return
 
         url = (
-            GOOGLE_REDIRECT_URI
-            .replace(
-                "/oauth2callback",
-                "/connect-youtube"
-            )
-            + "?user="
+            "https://mi-clipbot.onrender.com"
+            "/connect-youtube"
+            "?user="
             + user_id
         )
 
@@ -588,19 +575,12 @@ async def botones(
         await query.message.reply_text(
 
             "▶️ *Conectar YouTube*\n\n"
-
-            "Pulsa el botón de abajo.\n"
-            "Google te pedirá permiso para que "
-            "MI-CLIPBOT pueda subir videos "
-            "a tu canal.",
+            "Pulsa el botón de abajo.",
 
             reply_markup=teclado,
+
             parse_mode="Markdown"
         )
-
-    # ---------------------------------------------
-    # PUBLICAR
-    # ---------------------------------------------
 
     elif query.data == "publicar":
 
@@ -608,8 +588,8 @@ async def botones(
 
             await query.message.reply_text(
 
-                "⚠️ Primero debes conectar tu "
-                "cuenta de YouTube.",
+                "⚠️ Primero debes conectar "
+                "tu cuenta de YouTube.",
 
                 reply_markup=menu_principal()
             )
@@ -624,9 +604,7 @@ async def botones(
         if not clips:
 
             await query.message.reply_text(
-
-                "⚠️ Primero envíame un video "
-                "para crear los 5 clips."
+                "⚠️ Primero envíame un video."
             )
 
             return
@@ -638,10 +616,6 @@ async def botones(
 
             reply_markup=menu_privacidad()
         )
-
-    # ---------------------------------------------
-    # PRIVACIDAD
-    # ---------------------------------------------
 
     elif query.data in (
         "yt_public",
@@ -667,27 +641,19 @@ async def botones(
             privacidad
         )
 
-    # ---------------------------------------------
-    # INFO
-    # ---------------------------------------------
-
     elif query.data == "info":
 
         await query.message.reply_text(
 
             "ℹ️ *MI-CLIPBOT*\n\n"
-
             "1️⃣ Envías un video largo.\n"
-            "2️⃣ El bot calcula su duración.\n"
+            "2️⃣ Calcula su duración.\n"
             "3️⃣ Selecciona 5 partes.\n"
             "4️⃣ Cada parte dura 30 segundos.\n"
-            "5️⃣ Las convierte al formato elegido.\n"
-            "6️⃣ Te devuelve los 5 clips.\n"
-            "7️⃣ Puedes conectarlos con YouTube.\n"
-            "8️⃣ Puedes publicar los 5 clips.\n\n"
-
-            "🆓 Todo preparado para funcionar "
-            "en el servicio gratuito.",
+            "5️⃣ Convierte al formato elegido.\n"
+            "6️⃣ Te devuelve los clips.\n"
+            "7️⃣ Puedes conectar YouTube.\n"
+            "8️⃣ Puedes publicar los clips.",
 
             parse_mode="Markdown"
         )
@@ -703,7 +669,9 @@ async def publicar_clips(
     privacidad
 ):
 
-    user_id = str(mensaje.chat_id)
+    user_id = str(
+        mensaje.chat_id
+    )
 
     clips = context.user_data.get(
         "clips",
@@ -719,9 +687,7 @@ async def publicar_clips(
         return
 
     await mensaje.reply_text(
-        "📤 Iniciando publicación...\n\n"
-        "Esto puede tardar unos minutos porque "
-        "YouTube debe recibir cada video."
+        "📤 Iniciando publicación..."
     )
 
     publicados = []
@@ -736,16 +702,14 @@ async def publicar_clips(
         ):
 
             if not os.path.exists(clip):
-
                 continue
 
             await mensaje.reply_text(
-                f"📤 Subiendo clip {numero}/5..."
+                f"📤 Subiendo clip {numero}/{len(clips)}..."
             )
 
             titulo = (
-                f"MI CLIP {numero} | "
-                f"MI-CLIPBOT"
+                f"MI CLIP {numero} | MI-CLIPBOT"
             )
 
             descripcion = (
@@ -767,13 +731,11 @@ async def publicar_clips(
                 privacidad
             )
 
-            publicados.append(
-                video_id
-            )
+            publicados.append(video_id)
 
             await mensaje.reply_text(
 
-                f"✅ Clip {numero}/5 publicado.\n\n"
+                f"✅ Clip {numero} publicado.\n\n"
                 f"https://www.youtube.com/watch?v={video_id}"
             )
 
@@ -801,7 +763,7 @@ async def publicar_clips(
 
 
 # =========================================================
-# OBTENER DURACIÓN
+# DURACIÓN
 # =========================================================
 
 def obtener_duracion(video):
@@ -821,8 +783,6 @@ def obtener_duracion(video):
 
     texto = resultado.stderr
 
-    import re
-
     encontrado = re.search(
         r"Duration:\s*(\d+):(\d+):([\d.]+)",
         texto
@@ -834,17 +794,9 @@ def obtener_duracion(video):
             "No pude obtener la duración del video."
         )
 
-    horas = int(
-        encontrado.group(1)
-    )
-
-    minutos = int(
-        encontrado.group(2)
-    )
-
-    segundos = float(
-        encontrado.group(3)
-    )
+    horas = int(encontrado.group(1))
+    minutos = int(encontrado.group(2))
+    segundos = float(encontrado.group(3))
 
     return (
         horas * 3600
@@ -854,7 +806,7 @@ def obtener_duracion(video):
 
 
 # =========================================================
-# CREAR CLIP VERTICAL
+# CREAR VERTICAL
 # =========================================================
 
 def crear_vertical(
@@ -922,7 +874,7 @@ def crear_vertical(
 
 
 # =========================================================
-# CREAR CLIP HORIZONTAL
+# CREAR HORIZONTAL
 # =========================================================
 
 def crear_horizontal(
@@ -982,7 +934,7 @@ def crear_horizontal(
 
 
 # =========================================================
-# CREAR 5 CLIPS DE 30 SEGUNDOS
+# CREAR 5 CLIPS
 # =========================================================
 
 def crear_clips(
@@ -1003,13 +955,6 @@ def crear_clips(
         )
 
     duracion_clip = 30
-
-    cantidad = 5
-
-    # ---------------------------------------------
-    # Si hay menos de 150 segundos,
-    # distribuimos los clips disponibles.
-    # ---------------------------------------------
 
     if duracion_total < 150:
 
@@ -1036,7 +981,6 @@ def crear_clips(
         exist_ok=True
     )
 
-    # Borrar clips anteriores
     for archivo in os.listdir(
         clips_usuario_dir
     ):
@@ -1055,10 +999,6 @@ def crear_clips(
             pass
 
     clips = []
-
-    # ---------------------------------------------
-    # Distribuir los clips a lo largo del video
-    # ---------------------------------------------
 
     if cantidad_real == 1:
 
@@ -1110,9 +1050,7 @@ def crear_clips(
                 duracion_clip
             )
 
-        clips.append(
-            salida
-        )
+        clips.append(salida)
 
     return clips
 
@@ -1122,8 +1060,9 @@ def crear_clips(
 # =========================================================
 
 async def procesar_video(
- update,
-   context, archivo_telegram,
+    update,
+    context,
+    archivo_telegram,
     nombre,
     formato
 ):
@@ -1135,9 +1074,7 @@ async def procesar_video(
     )
 
     video_entrada = os.path.join(
-
         VIDEOS_DIR,
-
         nombre + ".mp4"
     )
 
@@ -1173,22 +1110,15 @@ async def procesar_video(
             user_id
         )
 
-        # Guardamos los clips para poder
-        # publicarlos después en YouTube.
+        # IMPORTANTE:
+        # Guardar los clips en la sesión del usuario
+        # para publicarlos después en YouTube.
 
-        
-
-        context.user_data[
-            "clips"
-        ] = clips
+        context.user_data["clips"] = clips
 
         await mensaje.reply_text(
             "📤 4/4 — Enviando los clips..."
         )
-
-        # -----------------------------------------
-        # ENVIAR TODOS LOS CLIPS
-        # -----------------------------------------
 
         for numero, clip in enumerate(
             clips,
@@ -1219,19 +1149,15 @@ async def procesar_video(
                     pool_timeout=60
                 )
 
-        teclado = menu_principal()
-
         await mensaje.reply_text(
 
             "✅ ¡Listo!\n\n"
-
             f"Se crearon {len(clips)} clips "
             "de aproximadamente 30 segundos.\n\n"
-
             "▶️ Si quieres subirlos a YouTube, "
             "pulsa *Publicar en YouTube*.",
 
-            reply_markup=teclado,
+            reply_markup=menu_principal(),
 
             parse_mode="Markdown"
         )
@@ -1253,9 +1179,7 @@ async def procesar_video(
 
         try:
 
-            if os.path.exists(
-                video_entrada
-            ):
+            if os.path.exists(video_entrada):
 
                 os.remove(
                     video_entrada
@@ -1266,7 +1190,7 @@ async def procesar_video(
 
 
 # =========================================================
-# RECIBIR VIDEO NORMAL
+# RECIBIR VIDEO
 # =========================================================
 
 async def recibir_video(
@@ -1285,11 +1209,8 @@ async def recibir_video(
     archivo = await video.get_file()
 
     nombre = (
-
         str(video.file_unique_id)
-
         + "_"
-
         + str(uuid.uuid4())[:8]
     )
 
@@ -1299,13 +1220,10 @@ async def recibir_video(
     )
 
     await procesar_video(
-
         update,
-context,
+        context,
         archivo,
-
         nombre,
-
         formato
     )
 
@@ -1328,12 +1246,10 @@ async def recibir_documento(
         return
 
     nombre_archivo = (
-
         documento.file_name or ""
     )
 
     extensiones = (
-
         ".mp4",
         ".mov",
         ".mkv",
@@ -1346,7 +1262,6 @@ async def recibir_documento(
     ):
 
         await update.message.reply_text(
-
             "⚠️ Envíame un archivo de video."
         )
 
@@ -1355,11 +1270,8 @@ async def recibir_documento(
     archivo = await documento.get_file()
 
     nombre = (
-
         str(documento.file_unique_id)
-
         + "_"
-
         + str(uuid.uuid4())[:8]
     )
 
@@ -1369,13 +1281,10 @@ async def recibir_documento(
     )
 
     await procesar_video(
-
         update,
-context,
+        context,
         archivo,
-
         nombre,
-
         formato
     )
 
@@ -1389,29 +1298,20 @@ def iniciar_bot():
     request = HTTPXRequest(
 
         connect_timeout=60,
-
         read_timeout=600,
-
         write_timeout=600,
-
         pool_timeout=60
     )
 
     app = (
-
         Application
-
         .builder()
-
         .token(TOKEN)
-
         .request(request)
-
         .build()
     )
 
     app.add_handler(
-
         CommandHandler(
             "start",
             start
@@ -1419,14 +1319,12 @@ def iniciar_bot():
     )
 
     app.add_handler(
-
         CallbackQueryHandler(
             botones
         )
     )
 
     app.add_handler(
-
         MessageHandler(
             filters.VIDEO,
             recibir_video
@@ -1434,7 +1332,6 @@ def iniciar_bot():
     )
 
     app.add_handler(
-
         MessageHandler(
             filters.Document.VIDEO,
             recibir_documento
@@ -1457,13 +1354,10 @@ def iniciar_bot():
 if __name__ == "__main__":
 
     hilo_web = threading.Thread(
-
         target=iniciar_web,
-
         daemon=True
     )
 
     hilo_web.start()
 
     iniciar_bot()
-
