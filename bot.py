@@ -1301,7 +1301,7 @@ async def recibir_video(
     await procesar_video(
 
         update,
-context,
+
         archivo,
 
         nombre,
