@@ -144,7 +144,7 @@ def connect_youtube():
         prompt="consent"
     )
 oauth_states[state + "_verifier"] = flow.code_verifier
-    return redirect(authorization_url)
+return redirect(authorization_url)
 
 
 @web.route("/oauth2callback")
