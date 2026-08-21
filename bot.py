@@ -1,4 +1,4 @@
-```python
+
 import os
 import asyncio
 import threading
@@ -1466,4 +1466,4 @@ if __name__ == "__main__":
     hilo_web.start()
 
     iniciar_bot()
-```
+
