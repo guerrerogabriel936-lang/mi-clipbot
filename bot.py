@@ -143,7 +143,7 @@ def connect_youtube():
         include_granted_scopes="true",
         prompt="consent"
     )
-
+oauth_states[state + "_verifier"] = flow.code_verifier
     return redirect(authorization_url)
 
 
@@ -186,7 +186,7 @@ def oauth2callback():
     flow.redirect_uri = GOOGLE_REDIRECT_URI
 
     try:
-
+flow.code_verifier = oauth_states.get(state + "_verifier")
         # Gracias a ProxyFix, request.url será HTTPS
         flow.fetch_token(
             authorization_response=request.url
